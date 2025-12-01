@@ -433,20 +433,20 @@ async def process_edit_photo(
     data = await state.get_data()
     photos = data.get("photos", [])
     
-    if len(photos) >= 3:
-        await message.answer(TEXTS["max_photos"])
+    # Разрешаем только ОДНО фото в анкете
+    if len(photos) >= 1:
+        await message.answer("❌ Можно загрузить только одно фото для анкеты")
         return
     
     photo_id = message.photo[-1].file_id
     photos.append(photo_id)
     
     await state.update_data(photos=photos)
-    await message.answer(TEXTS["photo_added"].format(n=len(photos)))
+    await message.answer("Фото сохранено ✅")
     
-    # Показываем кнопку "Готово ✅" после добавления первого фото
-    if len(photos) == 1:
-        # Отправляем кнопку отдельным сообщением (Telegram требует текст, используем минимальный)
-        await message.answer("⬇️", reply_markup=photo_done_kb())
+    # Показываем кнопку "Готово ✅" после добавления первого (и единственного) фото
+    # Отправляем кнопку отдельным сообщением (Telegram требует текст)
+    await message.answer("⬇️", reply_markup=photo_done_kb())
 
 
 @router.message(EditProfileStates.editing_photo, F.text == "Готово ✅")
@@ -467,8 +467,8 @@ async def process_edit_photo_done(
     
     update_data = {
         "photo_1": photos[0],
-        "photo_2": photos[1] if len(photos) > 1 else None,
-        "photo_3": photos[2] if len(photos) > 2 else None,
+        "photo_2": None,
+        "photo_3": None,
     }
     
     await UserRepository.update(session, user.id, update_data)

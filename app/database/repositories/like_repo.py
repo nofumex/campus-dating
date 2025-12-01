@@ -18,20 +18,14 @@ class LikeRepository:
         is_like: bool,
         message: Optional[str] = None
     ) -> Like:
-        """Создать лайк/дизлайк. Если уже существует, обновляет существующий."""
-        # Проверяем, существует ли уже лайк
-        existing_like = await LikeRepository.get_by_ids(session, from_user_id, to_user_id)
+        """Создать лайк/дизлайк.
         
-        if existing_like:
-            # Обновляем существующий лайк
-            existing_like.is_like = is_like
-            if message is not None:
-                existing_like.message = message
-            await session.flush()
-            await session.refresh(existing_like)
-            return existing_like
-        
-        # Создаем новый лайк
+        ВАЖНО: каждый новый лайк создаётся отдельной записью, даже если между
+        этими же пользователями уже были лайки/дизлайки. Это позволяет
+        одному и тому же пользователю лайкать другого много раз, а анкете
+        появляться несколько раз во входящих лайках и мэтчах.
+        """
+        # Всегда создаём новую запись лайка
         like = Like(
             from_user_id=from_user_id,
             to_user_id=to_user_id,
@@ -58,16 +52,43 @@ class LikeRepository:
             )
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        # Теперь между пользователями может быть несколько лайков,
+        # поэтому просто проверяем, что нашлась ХОТЯ БЫ одна строка,
+        # не используя scalar_one_or_none (оно кидает MultipleResultsFound).
+        return result.first() is not None
+
+    @staticmethod
+    async def delete_between_users(
+        session: AsyncSession,
+        user1_id: int,
+        user2_id: int
+    ) -> None:
+        """Удалить все лайки между двумя пользователями (в обе стороны)."""
+        from sqlalchemy import or_
+
+        stmt = select(Like).where(
+            or_(
+                and_(Like.from_user_id == user1_id, Like.to_user_id == user2_id),
+                and_(Like.from_user_id == user2_id, Like.to_user_id == user1_id),
+            )
+        )
+        result = await session.execute(stmt)
+        likes = list(result.scalars().all())
+        for like in likes:
+            await session.delete(like)
+        await session.flush()
     
     @staticmethod
     async def get_incoming_likes(
         session: AsyncSession,
         user_id: int
     ) -> List[Like]:
-        """Получить входящие лайки пользователя (исключая только тех, с кем уже есть мэтч)."""
-        from app.database.repositories.match_repo import MatchRepository
+        """Получить ВСЕ входящие лайки пользователя.
         
+        Не фильтруем по существующим мэтчам и не исключаем повторные лайки:
+        если кто-то лайкает пользователя несколько раз, все такие лайки
+        попадают в список (последние будут сверху).
+        """
         # Получаем все входящие лайки
         stmt = (
             select(Like)
@@ -82,21 +103,6 @@ class LikeRepository:
         )
         result = await session.execute(stmt)
         incoming_likes = list(result.scalars().all())
-        
-        # Исключаем только тех, с кем уже есть мэтч
-        if incoming_likes:
-            filtered_likes = []
-            for like in incoming_likes:
-                # Проверяем, есть ли мэтч с этим пользователем
-                has_match = await MatchRepository.check_match_exists(
-                    session,
-                    user_id,
-                    like.from_user_id
-                )
-                if not has_match:
-                    filtered_likes.append(like)
-            return filtered_likes
-        
         return incoming_likes
     
     @staticmethod

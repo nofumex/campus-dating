@@ -74,6 +74,10 @@ class NotificationService:
         from app.database.repositories.like_repo import LikeRepository
         from app.keyboards.reply import yes_no_kb
         
+        # Не отправляем уведомления фейковым пользователям и тем, у кого нет валидного чата
+        if getattr(user, "is_fake", False) or not user.telegram_id or user.telegram_id <= 0:
+            return
+        
         # Получаем количество входящих лайков
         incoming_likes = await LikeRepository.get_incoming_likes(session, user.id)
         likes_count = len(incoming_likes)

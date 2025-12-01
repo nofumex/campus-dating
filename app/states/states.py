@@ -62,4 +62,6 @@ class AdminStates(StatesGroup):
     viewing_reports = State()
     banning_user = State()
     broadcast_message = State()
+    adding_fake = State()
+    setting_super_favorite = State()
 

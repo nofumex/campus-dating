@@ -146,6 +146,8 @@ def admin_menu_kb(pending_reports_count: int = 0) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🚫 Забанить пользователя", callback_data="admin_ban")],
         [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton(text="Фейки", callback_data="admin_fakes")],
+        [InlineKeyboardButton(text="😍", callback_data="admin_super_favorite")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -156,6 +158,43 @@ def admin_universities_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ Добавить университет", callback_data="admin_add_uni")],
         [InlineKeyboardButton(text="📋 Список университетов", callback_data="admin_list_unis")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def admin_fakes_menu_kb() -> InlineKeyboardMarkup:
+    """Меню управления фейковыми анкетами."""
+    keyboard = [
+        [InlineKeyboardButton(text="+1 фейк", callback_data="admin_fake_add")],
+        [InlineKeyboardButton(text="Все фейки", callback_data="admin_fake_list")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def admin_fakes_list_kb(fakes: list) -> InlineKeyboardMarkup:
+    """Список фейковых анкет (одна кнопка на строку)."""
+    buttons = []
+    for user in fakes:
+        uni = user.university.short_name if user.university else "?"
+        text = f"{user.name} {user.age} {uni}"
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"admin_fake_{user.id}")])
+    if not buttons:
+        buttons.append([InlineKeyboardButton(text="Нет фейков", callback_data="admin_fake_nop")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_fakes")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_fake_detail_kb(fake_id: int, likes_count: int, dislikes_count: int) -> InlineKeyboardMarkup:
+    """Клавиатура под конкретной фейковой анкетой."""
+    keyboard = [
+        [
+            InlineKeyboardButton(text=f"❤️ {likes_count}", callback_data="admin_fake_nop"),
+            InlineKeyboardButton(text=f"👎 {dislikes_count}", callback_data="admin_fake_nop"),
+        ],
+        [
+            InlineKeyboardButton(text="Удалить фейк", callback_data=f"admin_fake_delete_{fake_id}"),
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 

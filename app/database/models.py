@@ -59,6 +59,8 @@ class User(Base):
     
     # Настройки
     show_in_search: Mapped[bool] = mapped_column(default=True)
+    is_fake: Mapped[bool] = mapped_column(default=False)
+    is_super_favorite: Mapped[bool] = mapped_column(default=False)
     
     # Временные метки
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -111,10 +113,6 @@ class Like(Base):
         "User",
         foreign_keys=[to_user_id],
         back_populates="received_likes"
-    )
-    
-    __table_args__ = (
-        UniqueConstraint('from_user_id', 'to_user_id', name='unique_like'),
     )
 
 

@@ -134,3 +134,19 @@ def matches_navigation_kb(username: str = None) -> ReplyKeyboardMarkup:
     ])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+
+def matches_view_profiles_kb() -> ReplyKeyboardMarkup:
+    """Клавиатура при просмотре мэтчей – только кнопка 'Смотреть анкеты'."""
+    keyboard = [
+        [KeyboardButton(text="👁 Смотреть анкеты")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def super_favorite_kb() -> ReplyKeyboardMarkup:
+    """Клавиатура для особенной анкеты – одна кнопка 😍."""
+    keyboard = [
+        [KeyboardButton(text="😍")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+

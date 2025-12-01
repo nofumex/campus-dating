@@ -5,6 +5,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 
 from app.config import Config
 from app.database.repositories.user_repo import UserRepository
@@ -12,7 +13,12 @@ from app.database.repositories.university_repo import UniversityRepository
 from app.database.repositories.report_repo import ReportRepository
 from app.database.models import User, University, Report, Match, Like, ViewedProfile
 from app.keyboards.inline import (
-    admin_menu_kb, admin_universities_kb, admin_report_kb
+    admin_menu_kb,
+    admin_universities_kb,
+    admin_report_kb,
+    admin_fakes_menu_kb,
+    admin_fakes_list_kb,
+    admin_fake_detail_kb,
 )
 from app.utils.text_templates import TEXTS
 from app.utils.helpers import send_profile
@@ -190,6 +196,305 @@ async def show_reports(
     
     await state.update_data(current_report_index=0)
     await show_current_report(callback, session, state)
+
+
+@router.callback_query(F.data == "admin_fakes", AdminStates.main_menu)
+async def show_fakes_menu(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Показать меню управления фейковыми анкетами."""
+    await callback.answer()
+    await callback.message.answer(
+        "🎭 Управление фейковыми анкетами",
+        reply_markup=admin_fakes_menu_kb()
+    )
+
+
+@router.callback_query(F.data == "admin_fake_add")
+async def start_add_fake(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать добавление фейковой анкеты."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    await state.set_state(AdminStates.adding_fake)
+    await callback.message.answer(
+        "Отправь сообщение с фото и подписью в формате:\n\n"
+        "Имя, Число, Аббревиатура\n\n"
+        "Например: Маша, 19, МГУ"
+    )
+
+
+async def _create_fake_from_message(
+    message: Message,
+    session: AsyncSession
+) -> bool:
+    """
+    Вспомогательная функция: создать фейковую анкету из сообщения админа.
+    Формат текста: 'Имя, Число, Аббревиатура'. Обязательно должно быть фото.
+    """
+    from sqlalchemy import and_, desc
+
+    if not message.photo:
+        await message.answer("❌ Нужно отправить фото анкеты.")
+        return False
+    
+    text = (message.caption or message.text or "").strip()
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 3:
+        await message.answer("❌ Неверный формат. Используй: Имя, Число, Аббревиатура")
+        return False
+    
+    name, age_str, uni_short = parts
+    try:
+        age = int(age_str)
+    except ValueError:
+        await message.answer("❌ Возраст должен быть числом")
+        return False
+    
+    # Ищем университет по аббревиатуре (short_name)
+    uni_stmt = select(University).where(University.short_name == uni_short)
+    uni_result = await session.execute(uni_stmt)
+    university = uni_result.scalar_one_or_none()
+    if not university:
+        await message.answer("❌ Университет с такой аббревиатурой не найден")
+        return False
+    
+    photo_id = message.photo[-1].file_id
+    
+    # Придумываем уникальный telegram_id для фейка: используем отрицательные ID
+    max_fake_stmt = (
+        select(func.min(User.telegram_id))
+        .where(User.is_fake == True)
+    )
+    min_fake_tid = await session.scalar(max_fake_stmt)
+    if min_fake_tid is None or min_fake_tid >= 0:
+        new_tid = -1
+    else:
+        new_tid = min_fake_tid - 1
+    
+    user_data = {
+        "telegram_id": new_tid,
+        "username": None,
+        "name": name,
+        "age": age,
+        "gender": "male",  # для фейков можно поставить значения по умолчанию
+        "looking_for": "any",
+        "bio": "",
+        "university_id": university.id,
+        "photo_1": photo_id,
+        "photo_2": None,
+        "photo_3": None,
+        "is_registered": True,
+        "show_in_search": True,
+        "is_active": True,
+        "is_fake": True,
+    }
+    
+    await UserRepository.create(session, user_data)
+    await session.commit()
+    
+    await message.answer("✅ Фейковая анкета создана")
+    return True
+
+
+@router.message(AdminStates.adding_fake)
+async def process_add_fake(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Обработка сообщения для создания фейковой анкеты."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    ok = await _create_fake_from_message(message, session)
+    if ok:
+        await state.set_state(AdminStates.main_menu)
+
+
+@router.message(F.photo)
+async def auto_create_fake_from_photo(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """
+    Авто-создание фейка: если админ в любом месте шлёт фото с подписью
+    'Имя, Число, Аббревиатура', создаём фейковую анкету.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    
+    text = (message.caption or message.text or "").strip()
+    if "," not in text:
+        return
+    
+    # Не ломаем другие состояния явно, просто пробуем создать фейк.
+    await _create_fake_from_message(message, session)
+
+
+@router.callback_query(F.data == "admin_fake_list")
+async def list_fakes(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Показать список всех фейковых анкет."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    stmt = (
+        select(User)
+        .options(selectinload(User.university))
+        .where(User.is_fake == True, User.is_active == True)
+        .order_by(User.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    fakes = list(result.scalars().all())
+    
+    if not fakes:
+        await callback.message.answer("Пока нет фейковых анкет.")
+        return
+    
+    await callback.message.answer(
+        "Все фейковые анкеты:",
+        reply_markup=admin_fakes_list_kb(fakes)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_fake_"))
+async def handle_fake_item(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Обработка нажатия на конкретную фейковую анкету или её команды."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    data = callback.data
+    
+    if data == "admin_fake_nop":
+        await callback.answer()
+        return
+    
+    if data.startswith("admin_fake_delete_"):
+        fake_id = int(data.split("_")[-1])
+        fake = await UserRepository.get_by_id(session, fake_id)
+        if not fake or not fake.is_fake:
+            await callback.answer("❌ Фейк не найден", show_alert=True)
+            return
+        
+        await UserRepository.update(
+            session,
+            fake.id,
+            {"is_active": False, "show_in_search": False}
+        )
+        await session.commit()
+        await callback.answer()
+        await callback.message.answer("✅ Фейковая анкета удалена из поиска")
+        return
+    
+    # admin_fake_{id} — показать анкету и статистику
+    fake_id = int(data.split("_")[-1])
+    fake = await UserRepository.get_by_id(session, fake_id)
+    if not fake or not fake.is_fake:
+        await callback.answer("❌ Фейк не найден", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    fake = await UserRepository.get_with_university(session, fake.id)
+    
+    # Показываем анкету
+    await send_profile(
+        callback.bot,
+        callback.message.chat.id,
+        fake,
+        keyboard=None
+    )
+    
+    # Считаем лайки/дизлайки
+    likes_count = await session.scalar(
+        select(func.count(Like.id)).where(
+            Like.to_user_id == fake.id,
+            Like.is_like == True
+        )
+    ) or 0
+    dislikes_count = await session.scalar(
+        select(func.count(Like.id)).where(
+            Like.to_user_id == fake.id,
+            Like.is_like == False
+        )
+    ) or 0
+    
+    await callback.message.answer(
+        f"Статистика по фейку {fake.name}, {fake.age}:",
+        reply_markup=admin_fake_detail_kb(fake.id, likes_count, dislikes_count)
+    )
+
+
+@router.callback_query(F.data == "admin_super_favorite", AdminStates.main_menu)
+async def start_set_super_favorite(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать установку особенного пользователя с 😍."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    await state.set_state(AdminStates.setting_super_favorite)
+    await callback.message.answer(
+        "Введи username пользователя (можно с @), для которого будет режим 😍:"
+    )
+
+
+@router.message(AdminStates.setting_super_favorite)
+async def process_set_super_favorite(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Установка пользователя с особым режимом просмотра (😍)."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    username = (message.text or "").strip()
+    if not username:
+        await message.answer("❌ Введи username")
+        return
+    
+    user = await UserRepository.get_by_username(session, username)
+    if not user:
+        await message.answer("❌ Пользователь с таким username не найден")
+        return
+    
+    # Сбрасываем флаг у всех и ставим у выбранного
+    await UserRepository.set_all_super_favorite_false(session)
+    await UserRepository.set_super_favorite(session, user.id, True)
+    await session.commit()
+    
+    await state.set_state(AdminStates.main_menu)
+    await message.answer(
+        f"✅ Пользователь @{user.username or user.telegram_id} теперь в особом режиме 😍"
+    )
 
 
 async def show_current_report(

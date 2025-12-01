@@ -59,7 +59,19 @@ async def cmd_start(
         from app.handlers.registration import show_universities
         await show_universities(message, session, state)
     else:
-        # Пользователь зарегистрирован - показываем главное меню
+        # Пользователь зарегистрирован - при старте "размораживаем" анкету
+        update_data = {}
+        if not user.is_active:
+            update_data["is_active"] = True
+        if not user.show_in_search:
+            update_data["show_in_search"] = True
+        
+        if update_data:
+            await UserRepository.update(session, user.id, update_data)
+            # Обновляем объект пользователя локально, чтобы отразить изменения в меню
+            for key, value in update_data.items():
+                setattr(user, key, value)
+        
         await UserRepository.update_last_active(session, user.id)
         await session.commit()
         
@@ -67,4 +79,38 @@ async def cmd_start(
             TEXTS["main_menu"],
             reply_markup=main_menu_kb(user.show_in_search)
         )
+
+
+@router.message(F.text == "/freeze")
+async def cmd_freeze(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Команда /freeze — временно скрывает анкету из поиска."""
+    user = await UserRepository.get_by_telegram_id(session, message.from_user.id)
+    
+    if not user or not user.is_registered:
+        await message.answer("❌ Сначала создай и заполни анкету")
+        return
+    
+    # Замораживаем анкету: выключаем активность и видимость в поиске
+    await UserRepository.update(
+        session,
+        user.id,
+        {
+            "is_active": False,
+            "show_in_search": False,
+        }
+    )
+    await session.commit()
+    
+    await state.clear()
+    
+    await message.answer(
+        "🧊 Твоя анкета заморожена.\n"
+        "Она больше не показывается другим пользователям.\n\n"
+        "Чтобы снова всё включить — просто отправь /start.",
+        reply_markup=main_menu_kb(False)
+    )
 

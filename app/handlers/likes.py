@@ -17,6 +17,57 @@ from app.states.states import LikesStates
 router = Router()
 
 
+@router.message(F.text == "Да")
+async def handle_yes_from_like_notification(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """
+    Обработка нажатия 'Да' из уведомления о новом лайке.
+    
+    Если мы уже на экране подтверждения просмотра лайков (LikesStates.confirming_view),
+    этот хендлер ничего не делает — сработает более специфичный обработчик ниже.
+    Во всех остальных случаях сразу переходим к просмотру лайков.
+    """
+    from app.states.states import LikesStates as _LikesStates
+
+    current_state = await state.get_state()
+    if current_state == _LikesStates.confirming_view:
+        # Даем сработать существующему обработчику для состояния confirming_view
+        return
+    
+    user = await UserRepository.get_by_telegram_id(session, message.from_user.id)
+    if not user or not user.is_registered:
+        await message.answer("❌ Сначала заверши регистрацию")
+        return
+    
+    await UserRepository.update_last_active(session, user.id)
+    await session.commit()
+    
+    # Получаем входящие лайки
+    likes = await LikeRepository.get_incoming_likes(session, user.id)
+    if not likes:
+        # Если лайков уже нет, показываем стандартное сообщение и меню
+        await message.answer(TEXTS["no_likes"])
+        from app.utils.menu_helpers import send_main_menu_with_cleanup
+        await send_main_menu_with_cleanup(
+            message.bot,
+            message.chat.id,
+            state,
+            user.show_in_search
+        )
+        return
+    
+    # Сохраняем ID пользователей, которые лайкнули
+    liked_user_ids = [like.from_user_id for like in likes]
+    await state.update_data(liked_user_ids=liked_user_ids, current_like_index=0)
+    await state.set_state(LikesStates.viewing_likes)
+    
+    # Сразу показываем первый лайк без дополнительного шага подтверждения
+    await show_current_like(message, session, state)
+
+
 @router.message(F.text == "3")
 async def show_incoming_likes(
     message: Message,
@@ -197,30 +248,26 @@ async def handle_like_back(
         is_like=True
     )
     
-    # Проверяем, есть ли уже мэтч
-    match_exists = await MatchRepository.check_match_exists(
-        session,
-        user.id,
-        current_liked_user_id
-    )
+    # Новый взаимный лайк -> создаём новый мэтч
+    await MatchRepository.create(session, user.id, current_liked_user_id)
+    # После создания мэтча удаляем все лайки и просмотры между пользователями,
+    # чтобы следующие лайки работали как "с нуля".
+    await LikeRepository.delete_between_users(session, user.id, current_liked_user_id)
+    from app.services.matching_service import MatchingService
+    await MatchingService.reset_views_between_users(session, user.id, current_liked_user_id)
+    # Делаем commit сразу после всех операций
+    await session.commit()
     
-    if not match_exists:
-        await MatchRepository.create(session, user.id, current_liked_user_id)
-        # Делаем commit сразу после создания мэтча, чтобы он был доступен
-        await session.commit()
-        
-        liked_user = await UserRepository.get_by_id(session, current_liked_user_id)
-        liked_user = await UserRepository.get_with_university(session, liked_user.id)
-        
-        # Уведомление уже отправляется в NotificationService.notify_match
-        await NotificationService.notify_match(
-            message.bot,
-            session,
-            user,
-            liked_user
-        )
-    else:
-        await session.commit()
+    liked_user = await UserRepository.get_by_id(session, current_liked_user_id)
+    liked_user = await UserRepository.get_with_university(session, liked_user.id)
+    
+    # Уведомление уже отправляется в NotificationService.notify_match
+    await NotificationService.notify_match(
+        message.bot,
+        session,
+        user,
+        liked_user
+    )
     
     # Удаляем обработанного пользователя из списка
     liked_user_ids = data.get("liked_user_ids", [])

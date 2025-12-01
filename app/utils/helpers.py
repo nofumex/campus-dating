@@ -43,52 +43,20 @@ async def send_profile(
     caption_prefix: str = "",
     caption_suffix: str = ""
 ):
-    """Отправить анкету пользователю. Возвращает сообщение(я) или None."""
+    """
+    Отправить анкету пользователю.
+
+    ВАЖНО: теперь в анкетах используется только ОДНО фото (photo_1).
+    Даже если в базе сохранены photo_2/photo_3, при показе анкеты они игнорируются.
+    Это полностью убирает медиагруппы и все проблемы с точками/отдельными сообщениями.
+    """
     caption = f"{caption_prefix}{user.name}, {user.age}, {user.university.short_name} 🎓\n\n{user.bio}{caption_suffix}"
-    
-    photos = [user.photo_1]
-    if user.photo_2:
-        photos.append(user.photo_2)
-    if user.photo_3:
-        photos.append(user.photo_3)
-    
-    if len(photos) == 1:
-        msg = await bot.send_photo(
-            chat_id=chat_id,
-            photo=photos[0],
-            caption=caption,
-            reply_markup=keyboard
-        )
-        return msg
-    else:
-        # Для медиагруппы счетчик добавляем в caption последнего фото
-        media = []
-        for i, photo in enumerate(photos):
-            if i == len(photos) - 1:
-                # Последнее фото - с полным caption и счетчиком
-                media.append(InputMediaPhoto(media=photo, caption=caption))
-            else:
-                # Остальные фото - без caption
-                media.append(InputMediaPhoto(media=photo))
-        
-        messages = await bot.send_media_group(chat_id=chat_id, media=media)
-        # Клавиатуру отправить отдельным сообщением (если нужна)
-        if keyboard:
-            # Отправляем кнопки отдельным сообщением
-            msg = await bot.send_message(
-                chat_id=chat_id,
-                text=".",
-                reply_markup=keyboard
-            )
-            # Удаляем сообщение с точкой через небольшую задержку
-            import asyncio
-            async def delete_temp_msg():
-                await asyncio.sleep(0.2)
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-                except:
-                    pass
-            asyncio.create_task(delete_temp_msg())
-            return messages
-        return messages
+
+    msg = await bot.send_photo(
+        chat_id=chat_id,
+        photo=user.photo_1,
+        caption=caption,
+        reply_markup=keyboard
+    )
+    return msg
 

@@ -33,3 +33,5 @@ async def send_main_menu_with_cleanup(
     # Сохраняем ID нового меню
     await state.update_data(prev_menu_ids=[menu_msg.message_id])
 
+
+

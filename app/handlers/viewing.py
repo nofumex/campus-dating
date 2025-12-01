@@ -10,7 +10,7 @@ from app.database.repositories.match_repo import MatchRepository
 from app.services.matching_service import MatchingService
 from app.services.notification_service import NotificationService
 from app.keyboards.inline import report_button_kb, continue_viewing_kb
-from app.keyboards.reply import main_menu_kb, viewing_profile_kb
+from app.keyboards.reply import main_menu_kb, viewing_profile_kb, super_favorite_kb
 from app.utils.text_templates import TEXTS
 from app.utils.helpers import send_profile
 from app.states.states import ViewingStates
@@ -105,43 +105,47 @@ async def show_next_profile(
         except:
             pass
     
-    # Отправляем анкету БЕЗ inline кнопки жалобы, с reply клавиатурой
-    # Определяем количество фото
-    photos_count = sum([
-        1 if next_profile.photo_1 else 0,
-        1 if next_profile.photo_2 else 0,
-        1 if next_profile.photo_3 else 0
-    ])
+    # Если анкета "особенная" (режим 😍), убираем старую клавиатуру и показываем другую
+    if next_profile.is_super_favorite:
+        from aiogram.types import ReplyKeyboardRemove
+        import asyncio
+
+        # Техническое сообщение для remove keyboard
+        remove_msg = await message.answer(
+            "😍",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        async def delete_remove_msg():
+            await asyncio.sleep(0.2)
+            try:
+                await message.bot.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=remove_msg.message_id
+                )
+            except:
+                pass
+
+        asyncio.create_task(delete_remove_msg())
+
+        profile_msg = await send_profile(
+            message.bot,
+            message.chat.id,
+            next_profile,
+            keyboard=super_favorite_kb()
+        )
+    else:
+        # Обычная анкета — стандартная клавиатура при просмотре
+        profile_msg = await send_profile(
+            message.bot,
+            message.chat.id,
+            next_profile,
+            keyboard=viewing_profile_kb()
+        )
     
     message_ids = []
-    if photos_count == 1:
-        # Одно фото - прикрепляем reply клавиатуру напрямую
-        profile_msgs = await send_profile(
-            message.bot,
-            message.chat.id,
-            next_profile,
-            keyboard=viewing_profile_kb()  # Прикрепляем reply клавиатуру
-        )
-        if profile_msgs:
-            message_ids.append(profile_msgs.message_id)
-    else:
-        # Медиагруппа - отправляем без клавиатуры, затем отдельное сообщение
-        profile_msgs = await send_profile(
-            message.bot,
-            message.chat.id,
-            next_profile,
-            keyboard=None
-        )
-        if isinstance(profile_msgs, list):
-            message_ids.extend([msg.message_id for msg in profile_msgs])
-            # Отправляем reply клавиатуру отдельным сообщением
-            # Используем минимальный текст, который будет удален при следующем показе
-            action_msg = await message.answer(
-                ".",  # Минимальный видимый текст (будет удален при следующем показе)
-                reply_markup=viewing_profile_kb()
-            )
-            if action_msg:
-                message_ids.append(action_msg.message_id)
+    if profile_msg:
+        message_ids.append(profile_msg.message_id)
     
     await state.update_data(prev_messages=message_ids)
 
@@ -153,6 +157,16 @@ async def handle_like_message(
     state: FSMContext
 ) -> None:
     """Обработка лайка через reply кнопку."""
+    await handle_like_callback(message, session, state)
+
+
+@router.message(F.text == "😍", ViewingStates.viewing_profiles)
+async def handle_super_favorite_like_message(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Обработка лайка через кнопку 😍 (особенный пользователь)."""
     await handle_like_callback(message, session, state)
 
 
@@ -179,7 +193,7 @@ async def handle_like_callback(
         except:
             pass
     
-    # Создаем лайк
+    # Создаем лайк (каждый раз отдельная запись)
     await LikeRepository.create(
         session,
         from_user_id=user.id,
@@ -198,30 +212,25 @@ async def handle_like_callback(
     )
     
     if has_mutual:
-        # Создаем мэтч
-        match_exists = await MatchRepository.check_match_exists(
-            session,
-            user.id,
-            current_profile_id
-        )
+        # Новый взаимный лайк -> создаём новый мэтч
+        await MatchRepository.create(session, user.id, current_profile_id)
+        # После создания мэтча удаляем все лайки и просмотры между пользователями,
+        # чтобы следующие лайки работали как "с нуля".
+        await LikeRepository.delete_between_users(session, user.id, current_profile_id)
+        await MatchingService.reset_views_between_users(session, user.id, current_profile_id)
+        # Делаем commit сразу после всех операций
+        await session.commit()
         
-        if not match_exists:
-            await MatchRepository.create(session, user.id, current_profile_id)
-            # Делаем commit сразу после создания мэтча
-            await session.commit()
-            
-            to_user = await UserRepository.get_by_id(session, current_profile_id)
-            to_user = await UserRepository.get_with_university(session, to_user.id)
-            
-            # Отправляем уведомления о мэтче
-            await NotificationService.notify_match(
-                message_or_callback.bot,
-                session,
-                user,
-                to_user
-            )
-        else:
-            await session.commit()
+        to_user = await UserRepository.get_by_id(session, current_profile_id)
+        to_user = await UserRepository.get_with_university(session, to_user.id)
+        
+        # Отправляем уведомления о мэтче
+        await NotificationService.notify_match(
+            message_or_callback.bot,
+            session,
+            user,
+            to_user
+        )
     else:
         # Делаем commit перед отправкой уведомлений
         await session.commit()
@@ -374,42 +383,16 @@ async def process_message(
             current_profile = await UserRepository.get_by_id(session, current_profile_id)
             current_profile = await UserRepository.get_with_university(session, current_profile.id)
             
-            # Показываем ту же анкету
-            # Определяем количество фото
-            photos_count = sum([
-                1 if current_profile.photo_1 else 0,
-                1 if current_profile.photo_2 else 0,
-                1 if current_profile.photo_3 else 0
-            ])
-            
+            # Показываем ту же анкету (всегда одно фото) с reply-клавиатурой
             message_ids = []
-            if photos_count == 1:
-                # Одно фото - прикрепляем reply клавиатуру напрямую
-                profile_msgs = await send_profile(
-                    message.bot,
-                    message.chat.id,
-                    current_profile,
-                    keyboard=viewing_profile_kb()
-                )
-                if profile_msgs:
-                    message_ids.append(profile_msgs.message_id)
-            else:
-                # Медиагруппа - отправляем без клавиатуры, затем отдельное сообщение
-                profile_msgs = await send_profile(
-                    message.bot,
-                    message.chat.id,
-                    current_profile,
-                    keyboard=None
-                )
-                if isinstance(profile_msgs, list):
-                    message_ids.extend([msg.message_id for msg in profile_msgs])
-                    # Отправляем reply клавиатуру отдельным сообщением
-                    action_msg = await message.answer(
-                        ".",  # Минимальный видимый текст (будет удален при следующем показе)
-                        reply_markup=viewing_profile_kb()
-                    )
-                    if action_msg:
-                        message_ids.append(action_msg.message_id)
+            profile_msg = await send_profile(
+                message.bot,
+                message.chat.id,
+                current_profile,
+                keyboard=viewing_profile_kb()
+            )
+            if profile_msg:
+                message_ids.append(profile_msg.message_id)
             
             await state.update_data(prev_messages=message_ids)
         else:

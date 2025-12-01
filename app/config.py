@@ -24,3 +24,5 @@ class Config:
         if not cls.ADMIN_ID:
             raise ValueError("ADMIN_ID не установлен в .env файле")
 
+
+

@@ -1,13 +1,15 @@
 """Обработчики взаимных симпатий."""
+import asyncio
+
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.repositories.user_repo import UserRepository
 from app.database.repositories.match_repo import MatchRepository
 from app.keyboards.inline import match_kb
-from app.keyboards.reply import main_menu_kb
+from app.keyboards.reply import main_menu_kb, matches_view_profiles_kb
 from app.utils.text_templates import TEXTS
 from app.utils.helpers import send_profile
 from app.states.states import MatchesStates
@@ -38,6 +40,24 @@ async def show_matches(
     
     await UserRepository.update_last_active(session, user.id)
     await session.commit()
+    
+    # Перед показом мэтчей УДАЛЯЕМ текущую reply-клавиатуру отдельным сообщением
+    remove_msg = await message.answer(
+        "💕",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    async def delete_remove_msg():
+        await asyncio.sleep(0.2)
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=remove_msg.message_id
+            )
+        except:
+            pass
+
+    asyncio.create_task(delete_remove_msg())
     
     # Удаляем предыдущие сообщения из других состояний
     data = await state.get_data()
@@ -94,6 +114,12 @@ async def show_matches(
     
     await state.update_data(matches=match_partners, current_match_index=0, prev_match_messages=[])
     await state.set_state(MatchesStates.viewing_matches)
+    
+    # Устанавливаем простую reply-клавиатуру с одной кнопкой "Смотреть анкеты"
+    await message.answer(
+        "Нажми кнопку ниже, чтобы вернуться к просмотру анкет 👇",
+        reply_markup=matches_view_profiles_kb()
+    )
     
     # Показываем первый мэтч
     await show_current_match(message, session, state)
@@ -196,3 +222,26 @@ async def handle_next_match(
         await show_current_match(callback.message, session, state)
     else:
         await callback.answer("Это последний мэтч", show_alert=True)
+
+
+@router.message(F.text == "👁 Смотреть анкеты", MatchesStates.viewing_matches)
+async def go_to_viewing_from_matches(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Из раздела мэтчей перейти к просмотру анкет."""
+    # Удаляем сообщения с анкетами мэтчей
+    data = await state.get_data()
+    prev_messages = data.get("prev_match_messages", [])
+    for msg_id in prev_messages:
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
+        except:
+            pass
+    
+    await state.clear()
+    
+    # Переходим к обычному просмотру анкет
+    from app.handlers.viewing import start_viewing
+    await start_viewing(message, session, state)

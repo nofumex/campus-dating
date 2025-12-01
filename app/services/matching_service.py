@@ -1,6 +1,6 @@
 """Сервис для подбора анкет."""
 from typing import Optional, List
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -94,5 +94,24 @@ class MatchingService:
         for viewed in viewed_profiles:
             await session.delete(viewed)
         
+        await session.flush()
+
+    @staticmethod
+    async def reset_views_between_users(
+        session: AsyncSession,
+        user1_id: int,
+        user2_id: int
+    ) -> None:
+        """Удалить пометки просмотра анкет между двумя пользователями (в обе стороны)."""
+        stmt = select(ViewedProfile).where(
+            or_(
+                and_(ViewedProfile.viewer_id == user1_id, ViewedProfile.viewed_id == user2_id),
+                and_(ViewedProfile.viewer_id == user2_id, ViewedProfile.viewed_id == user1_id),
+            )
+        )
+        result = await session.execute(stmt)
+        viewed_profiles = result.scalars().all()
+        for vp in viewed_profiles:
+            await session.delete(vp)
         await session.flush()
 

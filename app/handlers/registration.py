@@ -178,20 +178,20 @@ async def process_photo(
     data = await state.get_data()
     photos = data.get("photos", [])
     
-    if len(photos) >= 3:
-        await message.answer(TEXTS["max_photos"])
+    # Разрешаем только ОДНО фото
+    if len(photos) >= 1:
+        await message.answer("❌ Можно загрузить только одно фото для анкеты")
         return
     
     photo_id = message.photo[-1].file_id
     photos.append(photo_id)
     
     await state.update_data(photos=photos)
-    await message.answer(TEXTS["photo_added"].format(n=len(photos)))
+    await message.answer("Фото сохранено ✅")
     
-    # Показываем кнопку "Готово ✅" после добавления первого фото
-    if len(photos) == 1:
-        # Отправляем кнопку отдельным сообщением (Telegram требует текст, используем минимальный)
-        await message.answer("⬇️", reply_markup=photo_done_kb())
+    # Показываем кнопку "Готово ✅" после добавления первого (и единственного) фото
+    # Отправляем кнопку отдельным сообщением (Telegram требует текст)
+    await message.answer("⬇️", reply_markup=photo_done_kb())
 
 
 @router.message(RegistrationStates.waiting_for_photo, F.text == "Готово ✅")
@@ -242,21 +242,13 @@ async def process_bio(
     
     university = await UniversityRepository.get_by_id(session, data["university_id"])
     
-    # Отправляем фото с подписью
+    # Отправляем фото с подписью (только одно, даже если в состоянии почему-то больше)
     caption = f"{data['name']}, {data['age']}, {university.short_name} 🎓\n\n{data['bio']}"
     
-    if len(photos) == 1:
-        await message.answer_photo(
-            photo=photos[0],
-            caption=caption
-        )
-    else:
-        from aiogram.types import InputMediaPhoto
-        media = [InputMediaPhoto(media=photos[0], caption=caption)]
-        for photo in photos[1:]:
-            media.append(InputMediaPhoto(media=photo))
-        await message.answer_media_group(media=media)
-        await message.answer("⬆️")
+    await message.answer_photo(
+        photo=photos[0],
+        caption=caption
+    )
     
     await message.answer(
         "Всё верно?",
@@ -291,8 +283,8 @@ async def confirm_profile(
         "bio": data["bio"],
         "university_id": data["university_id"],
         "photo_1": photos[0],
-        "photo_2": photos[1] if len(photos) > 1 else None,
-        "photo_3": photos[2] if len(photos) > 2 else None,
+        "photo_2": None,
+        "photo_3": None,
         "is_registered": True,
         "show_in_search": True,
     }

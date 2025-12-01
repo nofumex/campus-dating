@@ -82,3 +82,5 @@ class ReportRepository:
             await session.refresh(report)
         return report
 
+
+

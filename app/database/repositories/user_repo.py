@@ -85,3 +85,40 @@ class UserRepository:
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
+    @staticmethod
+    async def get_by_username(
+        session: AsyncSession,
+        username: str
+    ) -> Optional[User]:
+        """Получить пользователя по username (без @)."""
+        if username.startswith("@"):
+            username = username[1:]
+        stmt = select(User).where(User.username == username)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def set_all_super_favorite_false(session: AsyncSession) -> None:
+        """Сбросить флаг is_super_favorite у всех пользователей."""
+        stmt = (
+            update(User)
+            .values(is_super_favorite=False, updated_at=datetime.utcnow())
+        )
+        await session.execute(stmt)
+        await session.flush()
+
+    @staticmethod
+    async def set_super_favorite(
+        session: AsyncSession,
+        user_id: int,
+        value: bool
+    ) -> None:
+        """Установить флаг is_super_favorite для конкретного пользователя."""
+        stmt = (
+            update(User)
+            .where(User.id == user_id)
+            .values(is_super_favorite=value, updated_at=datetime.utcnow())
+        )
+        await session.execute(stmt)
+        await session.flush()
+
