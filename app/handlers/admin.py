@@ -198,6 +198,182 @@ async def show_reports(
     await show_current_report(callback, session, state)
 
 
+@router.callback_query(F.data == "admin_ban", AdminStates.main_menu)
+async def start_manual_ban(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать ручной бан/разбан пользователя по username или Telegram ID."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    await state.set_state(AdminStates.banning_user)
+    await callback.message.answer(
+        "Введи username (с @ или без) или Telegram ID пользователя,\n"
+        "которого нужно забанить/разбанить:"
+    )
+
+
+@router.message(AdminStates.banning_user)
+async def process_manual_ban(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Обработка ввода username/ID для бана или разбана."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    identifier = (message.text or "").strip()
+    if not identifier:
+        await message.answer("❌ Введи username или ID пользователя")
+        return
+    
+    user: User | None = None
+    # Пробуем как ID
+    if identifier.isdigit():
+        tid = int(identifier)
+        stmt = select(User).where(User.telegram_id == tid)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+    else:
+        # Пробуем как username
+        user = await UserRepository.get_by_username(session, identifier)
+    
+    if not user:
+        await message.answer("❌ Пользователь не найден")
+        return
+    
+    # Переключаем бан/разбан
+    if user.is_banned:
+        await UserRepository.update(
+            session,
+            user.id,
+            {"is_banned": False, "is_active": True, "show_in_search": True}
+        )
+        await session.commit()
+        text = f"✅ Пользователь @{user.username or user.telegram_id} разбанен"
+    else:
+        await UserRepository.update(
+            session,
+            user.id,
+            {"is_banned": True, "is_active": False, "show_in_search": False}
+        )
+        await session.commit()
+        text = f"✅ Пользователь @{user.username or user.telegram_id} забанен"
+    
+    await state.set_state(AdminStates.main_menu)
+    await message.answer(text)
+
+
+@router.callback_query(F.data == "admin_broadcast", AdminStates.main_menu)
+async def start_broadcast(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать рассылку сообщения всем пользователям."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    await state.set_state(AdminStates.broadcast_message)
+    await callback.message.answer(
+        "Отправь сообщение, которое нужно разослать всем активным пользователям.\n"
+        "Можно текст или фото с подписью."
+    )
+
+
+@router.message(AdminStates.broadcast_message)
+async def process_broadcast(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Отправка рассылки всем активным пользователям."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    # Получаем всех реальных активных пользователей
+    stmt = select(User).where(
+        User.is_registered == True,
+        User.is_active == True,
+        User.is_banned == False,
+        User.is_fake == False,
+    )
+    result = await session.execute(stmt)
+    users = list(result.scalars().all())
+    
+    sent = 0
+    for user in users:
+        if not user.telegram_id or user.telegram_id <= 0:
+            continue
+        try:
+            if message.photo:
+                await message.bot.send_photo(
+                    chat_id=user.telegram_id,
+                    photo=message.photo[-1].file_id,
+                    caption=message.caption or message.text or ""
+                )
+            else:
+                await message.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=message.text or ""
+                )
+            sent += 1
+        except Exception:
+            # Проглатываем ошибки отправки отдельным пользователям
+            continue
+    
+    await state.set_state(AdminStates.main_menu)
+    await message.answer(f"✅ Рассылка отправлена {sent} пользователям")
+
+
+@router.callback_query(F.data == "admin_users", AdminStates.main_menu)
+async def show_users_info(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Краткая информация о пользователях (кнопка 'Пользователи')."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    total = await session.scalar(select(func.count(User.id)))
+    registered = await session.scalar(
+        select(func.count(User.id)).where(User.is_registered == True)
+    )
+    active = await session.scalar(
+        select(func.count(User.id)).where(User.is_active == True, User.is_banned == False)
+    )
+    banned = await session.scalar(
+        select(func.count(User.id)).where(User.is_banned == True)
+    )
+    fakes = await session.scalar(
+        select(func.count(User.id)).where(User.is_fake == True)
+    )
+    
+    text = (
+        "👥 Пользователи:\n\n"
+        f"Всего записей: {total}\n"
+        f"Зарегистрированных анкет: {registered}\n"
+        f"Активных (видимы в поиске): {active}\n"
+        f"Забаненных: {banned}\n"
+        f"Фейковых анкет: {fakes}"
+    )
+    
+    await callback.message.answer(text)
+
+
 @router.callback_query(F.data == "admin_fakes", AdminStates.main_menu)
 async def show_fakes_menu(
     callback: CallbackQuery,
