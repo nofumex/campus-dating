@@ -300,8 +300,11 @@ async def confirm_profile(
     await state.clear()
     
     from app.keyboards.reply import main_menu_kb
+    # Сначала отправляем текст без меню
+    await message.answer(TEXTS["profile_confirmed"])
+    # Затем отдельным сообщением отправляем главное меню с клавиатурой
     await message.answer(
-        TEXTS["profile_confirmed"],
+        TEXTS["main_menu"],
         reply_markup=main_menu_kb(user.show_in_search)
     )
 
