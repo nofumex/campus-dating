@@ -15,6 +15,8 @@ from app.database.models import User, University, Report, Match, Like, ViewedPro
 from app.keyboards.inline import (
     admin_menu_kb,
     admin_universities_kb,
+    admin_universities_list_kb,
+    admin_university_detail_kb,
     admin_report_kb,
     admin_fakes_menu_kb,
     admin_fakes_list_kb,
@@ -55,6 +57,73 @@ async def admin_start(
         "👑 Админ-панель",
         reply_markup=admin_menu_kb(len(pending_reports))
     )
+
+
+@router.message(F.text.startswith("/add_uni"))
+async def bulk_add_universities(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Массовое добавление университетов через команду /add_uni."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    # Получаем текст после команды /add_uni
+    text = message.text.replace("/add_uni", "").strip()
+    
+    if not text:
+        await message.answer(
+            "❌ Отправь команду /add_uni со списком университетов.\n\n"
+            "Формат (каждый университет с новой строки):\n"
+            "Полное название | Сокращение | Город"
+        )
+        return
+    
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    
+    if not lines:
+        await message.answer("❌ Список университетов пуст")
+        return
+    
+    added_count = 0
+    errors = []
+    
+    for i, line in enumerate(lines, 1):
+        parts = line.split("|")
+        if len(parts) != 3:
+            errors.append(f"Строка {i}: неверный формат - {line}")
+            continue
+        
+        name = parts[0].strip()
+        short_name = parts[1].strip()
+        city = parts[2].strip()
+        
+        if not name or not short_name or not city:
+            errors.append(f"Строка {i}: пустые поля - {line}")
+            continue
+        
+        try:
+            await UniversityRepository.create(
+                session,
+                name=name,
+                short_name=short_name,
+                city=city
+            )
+            added_count += 1
+        except Exception as e:
+            errors.append(f"Строка {i}: ошибка - {line} ({str(e)})")
+    
+    await session.commit()
+    
+    result_text = f"✅ Добавлено университетов: {added_count}"
+    if errors:
+        result_text += f"\n\n❌ Ошибок: {len(errors)}\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            result_text += f"\n... и еще {len(errors) - 10} ошибок"
+    
+    await message.answer(result_text)
 
 
 @router.callback_query(F.data == "admin_stats", AdminStates.main_menu)
@@ -135,6 +204,161 @@ async def show_universities_menu(
     )
 
 
+@router.callback_query(F.data == "admin_list_unis")
+async def list_universities(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Показать список всех университетов с возможностью редактирования."""
+    await callback.answer()
+    
+    universities = await UniversityRepository.get_all_active(session)
+    
+    if not universities:
+        await callback.message.answer("❌ Пока нет университетов в базе")
+        return
+    
+    await callback.message.answer(
+        "📋 Выберите университет для редактирования или удаления:",
+        reply_markup=admin_universities_list_kb(universities)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_uni_"))
+async def show_university_detail(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Показать детали университета с кнопками редактирования/удаления."""
+    await callback.answer()
+    
+    university_id = int(callback.data.split("_")[-1])
+    university = await UniversityRepository.get_by_id(session, university_id)
+    
+    if not university:
+        await callback.message.answer("❌ Университет не найден")
+        return
+    
+    text = f"""📋 Информация об университете:
+
+🎓 Полное название: {university.name}
+📝 Аббревиатура: {university.short_name}
+🏙️ Город: {university.city}
+✅ Статус: {'Активен' if university.is_active else 'Неактивен'}"""
+    
+    await callback.message.answer(
+        text,
+        reply_markup=admin_university_detail_kb(university_id)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_edit_uni_"))
+async def start_edit_university(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать редактирование университета."""
+    await callback.answer()
+    
+    university_id = int(callback.data.split("_")[-1])
+    university = await UniversityRepository.get_by_id(session, university_id)
+    
+    if not university:
+        await callback.message.answer("❌ Университет не найден")
+        return
+    
+    await state.update_data(editing_university_id=university_id)
+    await state.set_state(AdminStates.editing_university)
+    
+    await callback.message.answer(
+        f"Редактирование университета: {university.name}\n\n"
+        "Введи новые данные в формате:\n"
+        "Полное название | Сокращение | Город\n\n"
+        f"Текущие данные:\n"
+        f"{university.name} | {university.short_name} | {university.city}"
+    )
+
+
+@router.callback_query(F.data.startswith("admin_delete_uni_"))
+async def delete_university(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Удалить университет."""
+    await callback.answer()
+    
+    university_id = int(callback.data.split("_")[-1])
+    university = await UniversityRepository.get_by_id(session, university_id)
+    
+    if not university:
+        await callback.message.answer("❌ Университет не найден")
+        return
+    
+    await UniversityRepository.delete(session, university_id)
+    await session.commit()
+    
+    await callback.message.answer(f"✅ Университет '{university.name}' удален")
+
+
+@router.message(AdminStates.editing_university)
+async def process_edit_university(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Обработка редактирования университета."""
+    data = await state.get_data()
+    university_id = data.get("editing_university_id")
+    
+    if not university_id:
+        await message.answer("❌ Ошибка: ID университета не найден")
+        await state.set_state(AdminStates.main_menu)
+        return
+    
+    parts = message.text.split("|")
+    if len(parts) != 3:
+        await message.answer("❌ Неверный формат. Используй: Название | Сокращение | Город")
+        return
+    
+    name = parts[0].strip()
+    short_name = parts[1].strip()
+    city = parts[2].strip()
+    
+    await UniversityRepository.update(
+        session,
+        university_id,
+        {"name": name, "short_name": short_name, "city": city}
+    )
+    await session.commit()
+    
+    await state.set_state(AdminStates.main_menu)
+    await message.answer(f"✅ Университет обновлен: {name}")
+
+
+@router.callback_query(F.data == "admin_bulk_add_uni")
+async def start_bulk_add_universities(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext
+) -> None:
+    """Начать массовое добавление университетов."""
+    await callback.answer()
+    await state.set_state(AdminStates.adding_university)
+    await callback.message.answer(
+        "Отправь команду /add_uni с списком университетов.\n\n"
+        "Формат (каждый университет с новой строки):\n"
+        "Полное название | Сокращение | Город\n\n"
+        "Пример:\n"
+        "/add_uni\n"
+        "МГУ | МГУ | Москва\n"
+        "СПбГУ | СПбГУ | Санкт-Петербург"
+    )
+
+
 @router.callback_query(F.data == "admin_add_uni")
 async def start_add_university(
     callback: CallbackQuery,
@@ -156,6 +380,10 @@ async def process_add_university(
     state: FSMContext
 ) -> None:
     """Обработка добавления университета."""
+    # Проверяем, не является ли это командой /add_uni (она обрабатывается отдельно)
+    if message.text.startswith("/add_uni"):
+        return
+    
     parts = message.text.split("|")
     if len(parts) != 3:
         await message.answer("❌ Неверный формат. Используй: Название | Сокращение | Город")
@@ -265,6 +493,16 @@ async def process_manual_ban(
         )
         await session.commit()
         text = f"✅ Пользователь @{user.username or user.telegram_id} забанен"
+        
+        # Отправляем уведомление забаненному пользователю
+        try:
+            from app.utils.text_templates import TEXTS
+            await message.bot.send_message(
+                chat_id=user.telegram_id,
+                text=TEXTS.get("banned", "⚠️ Твоя анкета была заблокирована за нарушение правил.")
+            )
+        except:
+            pass  # Игнорируем ошибки отправки
     
     await state.set_state(AdminStates.main_menu)
     await message.answer(text)
@@ -734,7 +972,11 @@ async def handle_ban_user(
         return
     
     # Баним пользователя
-    await UserRepository.update(session, report.to_user_id, {"is_banned": True})
+    await UserRepository.update(
+        session, 
+        report.to_user_id, 
+        {"is_banned": True, "is_active": False, "show_in_search": False}
+    )
     
     # Обновляем статус жалобы
     await ReportRepository.update_status(

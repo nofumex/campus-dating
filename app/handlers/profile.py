@@ -305,21 +305,24 @@ async def edit_university(
     """Редактирование университета."""
     await callback.answer()
     await state.set_state(EditProfileStates.editing_university)
-    await callback.message.answer(
+    
+    from app.keyboards.inline import choose_university_kb
+    
+    # Отправляем предупреждающее сообщение
+    warning_msg = await callback.message.answer(
         "⚠️ Если сменишь университет, тебе будут показываться анкеты только из нового вуза.\n\nВыбери новый университет:"
     )
     
-    from app.database.repositories.university_repo import UniversityRepository
-    from app.keyboards.inline import universities_kb
-    
-    universities = await UniversityRepository.get_all_active(session)
-    if not universities:
-        await callback.message.answer("❌ Пока нет доступных университетов")
-        return
-    
-    await callback.message.answer(
+    # Отправляем сообщение с кнопкой
+    selection_msg = await callback.message.answer(
         "🎓 Выбери свой университет из списка:",
-        reply_markup=universities_kb(universities, page=1)
+        reply_markup=choose_university_kb()
+    )
+    
+    # Сохраняем ID обоих сообщений в состоянии для последующего удаления
+    await state.update_data(
+        university_warning_message_id=warning_msg.message_id,
+        university_selection_message_id=selection_msg.message_id
     )
 
 
@@ -519,62 +522,108 @@ async def reset_views(
     )
 
 
-@router.callback_query(F.data.startswith("uni_") & ~F.data.startswith("uni_page_"), EditProfileStates.editing_university)
-async def handle_university_change(
-    callback: CallbackQuery,
+@router.message(F.text.startswith("#") & F.via_bot)
+async def handle_university_selection_via_bot_edit(
+    message: Message,
     session: AsyncSession,
     state: FSMContext
 ) -> None:
-    """Обработка изменения университета."""
-    university_id = int(callback.data.split("_")[1])
+    """Обработка выбора университета через inline-режим при редактировании профиля."""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    from app.database.repositories.university_repo import UniversityRepository
-    university = await UniversityRepository.get_by_id(session, university_id)
-    if not university:
-        await callback.answer("❌ Университет не найден", show_alert=True)
+    logger.info(f"Profile handler вызван: text={message.text}, via_bot={message.via_bot}")
+    
+    # Проверяем, что сообщение пришло через нашего бота
+    if not message.via_bot:
+        logger.info("Сообщение не через бота, выходим")
         return
     
-    user = await UserRepository.get_by_telegram_id(session, callback.from_user.id)
-    await UserRepository.update(session, user.id, {"university_id": university_id})
+    # Проверяем формат сообщения (должно быть #АББРЕВИАТУРА)
+    if not message.text or len(message.text) < 2 or not message.text[1:].strip():
+        logger.info("Неверный формат сообщения")
+        return
+    
+    # Проверяем текущее состояние
+    current_state = await state.get_state()
+    logger.info(f"Profile handler: состояние = {current_state}, ожидаемое = {EditProfileStates.editing_university}")
+    if current_state != EditProfileStates.editing_university:
+        logger.info(f"Состояние не совпадает, выходим")
+        return
+    
+    logger.info(f"Обрабатываем выбор университета: {message.text}")
+    
+    # Удаляем сообщение с выбором университета СРАЗУ
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение: {e}")
+    
+    # Извлекаем аббревиатуру из текста сообщения (убираем #)
+    short_name = message.text[1:].strip()
+    
+    # Ищем университет по аббревиатуре
+    from app.database.repositories.university_repo import UniversityRepository
+    universities = await UniversityRepository.get_all_active(session)
+    university = None
+    for uni in universities:
+        if uni.short_name == short_name:
+            university = uni
+            break
+    
+    if not university:
+        await message.answer("❌ Университет не найден")
+        return
+    
+    user = await UserRepository.get_by_telegram_id(session, message.from_user.id)
+    await UserRepository.update(session, user.id, {"university_id": university.id})
     await session.commit()
     
+    # Получаем данные состояния для удаления предыдущих сообщений
+    state_data = await state.get_data()
+    warning_msg_id = state_data.get("university_warning_message_id")
+    selection_msg_id = state_data.get("university_selection_message_id")
+    
+    # Удаляем предупреждающее сообщение
+    if warning_msg_id:
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=warning_msg_id
+            )
+        except Exception as e:
+            import logging
+            logging.warning(f"Не удалось удалить предупреждающее сообщение: {e}")
+    
+    # Удаляем сообщение с кнопкой "Выбери свой университет из списка"
+    if selection_msg_id:
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=selection_msg_id
+            )
+        except Exception as e:
+            import logging
+            logging.warning(f"Не удалось удалить сообщение с кнопкой: {e}")
+    
     await state.set_state(ProfileMenuStates.in_profile_menu)
-    await callback.message.delete()
-    # Отправляем сообщение об обновлении
-    await callback.message.answer(TEXTS["profile_updated"])
-    # Отправляем обновленный профиль
-    user = await UserRepository.get_by_telegram_id(session, callback.from_user.id)
+    
+    # Получаем обновленного пользователя
+    user = await UserRepository.get_by_telegram_id(session, message.from_user.id)
     user = await UserRepository.get_with_university(session, user.id)
+    
+    # Отправляем обновленный профиль
     await send_profile(
-        callback.message.bot,
-        callback.message.chat.id,
+        message.bot,
+        message.chat.id,
         user,
         keyboard=None
     )
     # Отправляем меню
-    await callback.message.answer(
+    await message.answer(
         "Твоя анкета 👆\n\n" + TEXTS["profile_menu"],
         reply_markup=profile_menu_kb()
     )
-
-
-@router.callback_query(F.data.startswith("uni_page_"), EditProfileStates.editing_university)
-async def handle_university_page_change(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext
-) -> None:
-    """Обработка пагинации университетов при редактировании."""
-    page = int(callback.data.split("_")[-1])
-    
-    from app.database.repositories.university_repo import UniversityRepository
-    from app.keyboards.inline import universities_kb
-    
-    universities = await UniversityRepository.get_all_active(session)
-    await callback.message.edit_reply_markup(
-        reply_markup=universities_kb(universities, page=page)
-    )
-    await callback.answer()
 
 
 

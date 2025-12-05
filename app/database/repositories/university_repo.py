@@ -43,6 +43,54 @@ class UniversityRepository:
         await session.flush()
         await session.refresh(university)
         return university
+    
+    @staticmethod
+    async def update(
+        session: AsyncSession,
+        university_id: int,
+        data: dict
+    ) -> Optional[University]:
+        """Обновить информацию об университете."""
+        university = await UniversityRepository.get_by_id(session, university_id)
+        if not university:
+            return None
+        
+        for key, value in data.items():
+            if hasattr(university, key):
+                setattr(university, key, value)
+        
+        await session.flush()
+        await session.refresh(university)
+        return university
+    
+    @staticmethod
+    async def delete(
+        session: AsyncSession,
+        university_id: int
+    ) -> bool:
+        """Удалить университет (деактивировать)."""
+        university = await UniversityRepository.get_by_id(session, university_id)
+        if not university:
+            return False
+        
+        university.is_active = False
+        await session.flush()
+        return True
+    
+    @staticmethod
+    async def get_by_short_name(
+        session: AsyncSession,
+        short_name: str
+    ) -> Optional[University]:
+        """Получить университет по аббревиатуре."""
+        stmt = select(University).where(
+            University.short_name == short_name,
+            University.is_active == True
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+
 
 
 

@@ -1,13 +1,13 @@
 """Обработчики регистрации."""
 from typing import List
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.repositories.user_repo import UserRepository
 from app.database.repositories.university_repo import UniversityRepository
-from app.keyboards.inline import universities_kb
+from app.keyboards.inline import choose_university_kb
 from app.keyboards.reply import (
     gender_kb, looking_for_kb, photo_done_kb, skip_kb, confirm_profile_kb
 )
@@ -42,46 +42,120 @@ async def show_universities(
     
     await message.answer(
         TEXTS["choose_university"],
-        reply_markup=universities_kb(UNIVERSITIES_CACHE, page=1)
+        reply_markup=choose_university_kb()
     )
 
 
-@router.callback_query(F.data.startswith("uni_page_"))
-async def handle_university_page(
-    callback: CallbackQuery,
+
+
+@router.inline_query()
+async def handle_inline_query(
+    inline_query: InlineQuery,
     session: AsyncSession,
     state: FSMContext
 ) -> None:
-    """Обработка пагинации университетов."""
-    page = int(callback.data.split("_")[-1])
+    """Обработка inline-запросов для выбора университета."""
+    query = inline_query.query.strip()
+    query_lower = query.lower()
     
-    await callback.message.edit_reply_markup(
-        reply_markup=universities_kb(UNIVERSITIES_CACHE, page=page)
+    # Обрабатываем ТОЛЬКО запросы, которые точно начинаются с "uni" (не пустые)
+    if not query_lower.startswith("uni"):
+        return
+    
+    # Получаем все активные университеты
+    universities = await UniversityRepository.get_all_active(session)
+    
+    if not universities:
+        await inline_query.answer(
+            results=[],
+            cache_time=1
+        )
+        return
+    
+    # Фильтруем университеты по запросу (если есть текст после "uni")
+    query_text = query_lower.replace("uni", "").strip()
+    if query_text:
+        universities = [
+            uni for uni in universities
+            if query_text in uni.name.lower() or query_text in uni.short_name.lower() or query_text in uni.city.lower()
+        ]
+    
+    # Создаем результаты для inline-запроса
+    # title = аббревиатура, description = полное название - город
+    results = []
+    for uni in universities[:50]:  # Telegram ограничивает до 50 результатов
+        results.append(
+            InlineQueryResultArticle(
+                id=f"uni_{uni.id}",
+                title=uni.short_name,  # Аббревиатура в title
+                description=f"{uni.name} - {uni.city}",  # Полное название и город в description
+                input_message_content=InputTextMessageContent(
+                    message_text=f"#{uni.short_name}"  # Отправляем только аббревиатуру
+                )
+            )
+        )
+    
+    await inline_query.answer(
+        results=results,
+        cache_time=300
     )
-    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("uni_") & ~F.data.startswith("uni_page_"))
-async def handle_university_selection(
-    callback: CallbackQuery,
+@router.message(F.text.startswith("#") & F.via_bot)
+async def handle_university_selection_via_bot(
+    message: Message,
     session: AsyncSession,
     state: FSMContext
 ) -> None:
-    """Обработка выбора университета."""
-    university_id = int(callback.data.split("_")[1])
+    """Обработка выбора университета через inline-режим (сообщение в формате #АББРЕВИАТУРА)."""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    university = await UniversityRepository.get_by_id(session, university_id)
+    # Проверяем, что сообщение пришло через нашего бота
+    if not message.via_bot:
+        return
+    
+    # Проверяем формат сообщения (должно быть #АББРЕВИАТУРА)
+    if not message.text or len(message.text) < 2 or not message.text[1:].strip():
+        return
+    
+    # Проверяем текущее состояние ПЕРЕД удалением сообщения
+    current_state = await state.get_state()
+    logger.info(f"Registration handler: состояние = {current_state}, ожидаемое = {RegistrationStates.waiting_for_university}")
+    
+    # Обрабатываем только если состояние waiting_for_university
+    if current_state != RegistrationStates.waiting_for_university:
+        # НЕ возвращаемся - позволяем другим обработчикам обработать
+        # Но не обрабатываем сами
+        return
+    
+    # Удаляем сообщение с выбором университета СРАЗУ
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение: {e}")
+    
+    # Извлекаем аббревиатуру из текста сообщения (убираем #)
+    short_name = message.text[1:].strip()
+    
+    # Ищем университет по аббревиатуре
+    universities = await UniversityRepository.get_all_active(session)
+    university = None
+    for uni in universities:
+        if uni.short_name == short_name:
+            university = uni
+            break
+    
     if not university:
-        await callback.answer("❌ Университет не найден", show_alert=True)
+        await message.answer("❌ Университет не найден")
         return
     
     # Сохраняем выбранный университет
-    await state.update_data(university_id=university_id)
+    await state.update_data(university_id=university.id)
     await state.set_state(RegistrationStates.waiting_for_name)
     
-    await callback.message.delete()
-    await callback.message.answer(TEXTS["ask_name"])
-    await callback.answer()
+    # Отправляем сообщение с запросом имени
+    await message.answer(TEXTS["ask_name"])
 
 
 @router.message(RegistrationStates.waiting_for_name)

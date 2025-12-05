@@ -3,7 +3,8 @@ import os
 from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+# Загружаем переменные из .env, но без жёсткого хардкода значений
+load_dotenv(override=True)
 
 
 class Config:
@@ -13,7 +14,7 @@ class Config:
     ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://user:password@localhost:5432/dating_bot"
+        "postgresql+asyncpg://postgres:textilcomplex111@localhost:5432/dating_bot",
     )
     
     @classmethod

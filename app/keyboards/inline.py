@@ -62,6 +62,19 @@ def universities_kb(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def choose_university_kb() -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой для выбора университета через inline-режим."""
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text="Выбрать университет",
+                switch_inline_query_current_chat="uni"
+            )
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
 def report_reasons_kb() -> InlineKeyboardMarkup:
     """Клавиатура с причинами жалобы."""
     keyboard = [
@@ -156,8 +169,33 @@ def admin_universities_kb() -> InlineKeyboardMarkup:
     """Меню управления университетами."""
     keyboard = [
         [InlineKeyboardButton(text="➕ Добавить университет", callback_data="admin_add_uni")],
+        [InlineKeyboardButton(text="📝 Массовое добавление", callback_data="admin_bulk_add_uni")],
         [InlineKeyboardButton(text="📋 Список университетов", callback_data="admin_list_unis")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def admin_universities_list_kb(universities: list) -> InlineKeyboardMarkup:
+    """Клавиатура со списком университетов для редактирования/удаления."""
+    keyboard = []
+    for uni in universities:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{uni.short_name} - {uni.city}",
+                callback_data=f"admin_uni_{uni.id}"
+            )
+        ])
+    keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_universities")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def admin_university_detail_kb(university_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для управления конкретным университетом."""
+    keyboard = [
+        [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"admin_edit_uni_{university_id}")],
+        [InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"admin_delete_uni_{university_id}")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_unis")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 

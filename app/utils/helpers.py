@@ -52,11 +52,36 @@ async def send_profile(
     """
     caption = f"{caption_prefix}{user.name}, {user.age}, {user.university.short_name} 🎓\n\n{user.bio}{caption_suffix}"
 
-    msg = await bot.send_photo(
-        chat_id=chat_id,
-        photo=user.photo_1,
-        caption=caption,
-        reply_markup=keyboard
-    )
-    return msg
+    # Проверяем наличие и валидность фото
+    if not user.photo_1:
+        # Если фото нет, отправляем только текст
+        msg = await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            reply_markup=keyboard
+        )
+        return msg
+    
+    try:
+        # Пытаемся отправить фото
+        msg = await bot.send_photo(
+            chat_id=chat_id,
+            photo=user.photo_1,
+            caption=caption,
+            reply_markup=keyboard
+        )
+        return msg
+    except Exception as e:
+        # Если file_id невалиден, отправляем только текст
+        # Логируем ошибку для отладки
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Не удалось отправить фото для пользователя {user.id}: {e}")
+        
+        msg = await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            reply_markup=keyboard
+        )
+        return msg
 
