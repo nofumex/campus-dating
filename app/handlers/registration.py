@@ -105,7 +105,7 @@ async def handle_inline_query(
     )
 
 
-@router.message(F.text.startswith("#") & F.via_bot)
+@router.message(F.text.startswith("#") & F.via_bot, RegistrationStates.waiting_for_university)
 async def handle_university_selection_via_bot(
     message: Message,
     session: AsyncSession,
@@ -121,15 +121,6 @@ async def handle_university_selection_via_bot(
     
     # Проверяем формат сообщения (должно быть #АББРЕВИАТУРА)
     if not message.text or len(message.text) < 2 or not message.text[1:].strip():
-        return
-    
-    # Проверяем текущее состояние ПЕРЕД удалением сообщения
-    current_state = await state.get_state()
-    logger.info(f"Registration handler: состояние = {current_state}, ожидаемое = {RegistrationStates.waiting_for_university}")
-    
-    # Обрабатываем только если состояние waiting_for_university
-    if current_state != RegistrationStates.waiting_for_university:
-        logger.info("Состояние не waiting_for_university, пропускаем")
         return
     
     logger.info(f"Обрабатываем выбор университета при регистрации: {message.text}")

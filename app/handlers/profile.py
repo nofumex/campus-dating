@@ -522,7 +522,7 @@ async def reset_views(
     )
 
 
-@router.message(F.text.startswith("#") & F.via_bot)
+@router.message(F.text.startswith("#") & F.via_bot, EditProfileStates.editing_university)
 async def handle_university_selection_via_bot_edit(
     message: Message,
     session: AsyncSession,
@@ -542,13 +542,6 @@ async def handle_university_selection_via_bot_edit(
     # Проверяем формат сообщения (должно быть #АББРЕВИАТУРА)
     if not message.text or len(message.text) < 2 or not message.text[1:].strip():
         logger.info("Неверный формат сообщения")
-        return
-    
-    # Проверяем текущее состояние
-    current_state = await state.get_state()
-    logger.info(f"Profile handler: состояние = {current_state}, ожидаемое = {EditProfileStates.editing_university}")
-    if current_state != EditProfileStates.editing_university:
-        logger.info(f"Состояние не совпадает, выходим")
         return
     
     logger.info(f"Обрабатываем выбор университета: {message.text}")
