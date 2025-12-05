@@ -22,13 +22,17 @@ router = Router()
 UNIVERSITIES_CACHE: List = []
 
 
-@router.message(RegistrationStates.waiting_for_university)
+@router.message(RegistrationStates.waiting_for_university & ~F.via_bot)
 async def show_universities(
     message: Message,
     session: AsyncSession,
     state: FSMContext
 ) -> None:
     """Показать список университетов."""
+    # Игнорируем сообщения через inline-режим (они обрабатываются отдельным обработчиком)
+    if message.via_bot:
+        return
+    
     global UNIVERSITIES_CACHE
     
     if not UNIVERSITIES_CACHE:
@@ -125,9 +129,10 @@ async def handle_university_selection_via_bot(
     
     # Обрабатываем только если состояние waiting_for_university
     if current_state != RegistrationStates.waiting_for_university:
-        # НЕ возвращаемся - позволяем другим обработчикам обработать
-        # Но не обрабатываем сами
+        logger.info("Состояние не waiting_for_university, пропускаем")
         return
+    
+    logger.info(f"Обрабатываем выбор университета при регистрации: {message.text}")
     
     # Удаляем сообщение с выбором университета СРАЗУ
     try:
@@ -137,6 +142,7 @@ async def handle_university_selection_via_bot(
     
     # Извлекаем аббревиатуру из текста сообщения (убираем #)
     short_name = message.text[1:].strip()
+    logger.info(f"Ищем университет с аббревиатурой: {short_name}")
     
     # Ищем университет по аббревиатуре
     universities = await UniversityRepository.get_all_active(session)
@@ -144,15 +150,18 @@ async def handle_university_selection_via_bot(
     for uni in universities:
         if uni.short_name == short_name:
             university = uni
+            logger.info(f"Найден университет: {university.name}")
             break
     
     if not university:
+        logger.warning(f"Университет с аббревиатурой {short_name} не найден")
         await message.answer("❌ Университет не найден")
         return
     
     # Сохраняем выбранный университет
     await state.update_data(university_id=university.id)
     await state.set_state(RegistrationStates.waiting_for_name)
+    logger.info(f"Университет сохранен, переходим к запросу имени")
     
     # Отправляем сообщение с запросом имени
     await message.answer(TEXTS["ask_name"])

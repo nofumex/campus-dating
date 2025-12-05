@@ -43,3 +43,4 @@ class BanCheckMiddleware(BaseMiddleware):
                     return  # Не обрабатываем запрос
         
         return await handler(event, data)
+
