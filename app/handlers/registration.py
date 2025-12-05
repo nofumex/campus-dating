@@ -22,7 +22,7 @@ router = Router()
 UNIVERSITIES_CACHE: List = []
 
 
-@router.message(RegistrationStates.waiting_for_university & ~F.via_bot)
+@router.message(RegistrationStates.waiting_for_university, ~F.via_bot)
 async def show_universities(
     message: Message,
     session: AsyncSession,
@@ -105,7 +105,7 @@ async def handle_inline_query(
     )
 
 
-@router.message(F.text.startswith("#") & F.via_bot, RegistrationStates.waiting_for_university)
+@router.message(RegistrationStates.waiting_for_university, F.text.startswith("#"), F.via_bot)
 async def handle_university_selection_via_bot(
     message: Message,
     session: AsyncSession,

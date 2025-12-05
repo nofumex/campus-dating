@@ -522,7 +522,7 @@ async def reset_views(
     )
 
 
-@router.message(F.text.startswith("#") & F.via_bot, EditProfileStates.editing_university)
+@router.message(EditProfileStates.editing_university, F.text.startswith("#"), F.via_bot)
 async def handle_university_selection_via_bot_edit(
     message: Message,
     session: AsyncSession,
